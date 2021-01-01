@@ -2,6 +2,7 @@ import * as functions from 'firebase-functions';
 import bent from 'bent';
 import { addMinutes, startOfHour, getUnixTime, format } from 'date-fns';
 import { calculateTokenLiquidity as _calculateTokenLiquidity } from './token_liquidity';
+import { indexTokenNames as _indexTokenNames } from './token_search_index';
 
 export type GraphQLResponse<T> = { data: T };
 export type EthBlockResponse = { id: string; number: string; timestamp: string };
@@ -31,6 +32,8 @@ export const ETH_BLOCKS_SUBGRAPH_URL = 'https://api.thegraph.com/subgraphs/name/
 const POST = (url: string) => bent(url, 'POST', 'json', [200, 400, 404, 401, 500]);
 
 export const calculateTokenLiquidity = _calculateTokenLiquidity;
+export const indexTokenNames = _indexTokenNames;
+
 export const pullBalancerData = functions.https.onRequest(async (req, res) => {
     const hourStart = startOfHour(new Date());
     const tenMinutesLater = addMinutes(hourStart, 10);

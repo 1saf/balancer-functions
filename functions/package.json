@@ -17,6 +17,7 @@
     "@google-cloud/firestore": "^4.7.1",
     "@types/bent": "^7.3.2",
     "@types/numeral": "^0.0.28",
+    "algoliasearch": "^4.8.3",
     "bent": "^7.3.12",
     "date-fns": "^2.16.1",
     "firebase-admin": "^9.2.0",
