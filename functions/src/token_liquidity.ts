@@ -7,11 +7,13 @@ import { BALANCER_SUBGRAPH_URL } from '.';
 
 export type PoolData = {
     pools: {
+        id: string;
         tokens: {
             balance: string;
             address: string;
             name: string;
             symbol: string;
+            denormWeight: string;
         }[];
     }[];
 };
