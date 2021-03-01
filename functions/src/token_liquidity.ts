@@ -5,17 +5,27 @@ import { chunk } from 'lodash';
 import { COLLECTION_NAME, firestore, GET, GraphQLResponse, POST } from './utils';
 import { BALANCER_SUBGRAPH_URL } from '.';
 
-export type PoolData = {
-    pools: {
+export type Token = {
+    balance: string;
+    address: string;
+    name: string;
+    symbol: string;
+    denormWeight: string;
+}
+
+export type Pool =  {
         id: string;
-        tokens: {
-            balance: string;
-            address: string;
-            name: string;
-            symbol: string;
-            denormWeight: string;
-        }[];
-    }[];
+        totalSwapFee: string;
+        totalSwapVolume: string;
+        totalShares: string;
+        tokens: Token[];
+        liquidity: string;
+        crp: boolean;
+        controller: string;
+}
+
+export type PoolData = {
+    pools: Pool[];
 };
 
 export type TokenPrice = Record<string, { usd: number }>;

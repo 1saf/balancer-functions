@@ -1,8 +1,8 @@
-import { addMinutes, eachHourOfInterval, format, fromUnixTime, getUnixTime, startOfDay, startOfHour } from 'date-fns';
+import { addMinutes, eachHourOfInterval, format, fromUnixTime, getUnixTime, startOfDay, startOfHour, subHours } from 'date-fns';
 import * as functions from 'firebase-functions';
+import { chunk } from 'lodash';
 import { ETH_BLOCKS_SUBGRAPH_URL } from '.';
 import { BALANCER_SUBGRAPH_URL, COLLECTION_NAME, EthBlocksResponse, firestore, POST, GraphQLResponse } from './utils';
-// import Firestore from '@google-cloud/firestore';
 
 export type BalancerData = {
     balancer: {
@@ -15,19 +15,19 @@ export type BalancerData = {
     };
 };
 
-const REBUILD = true;
-export const BALANCER_CONTRACT_START_DATE = new Date(2020, 2, 29);
-export const TODAY = startOfDay(new Date());
+const REBUILD = false;
+export const BALANCER_CONTRACT_START_DATE = startOfDay(new Date(2020, 1, 29));
+export const TODAY = startOfHour(new Date());
 
-export const pullBalancerData = functions.runWith({ timeoutSeconds: 240 }).https.onRequest(async (req, res) => {
-    const hourStart = startOfHour(new Date());
+export const pullBalancerData = functions.runWith({ timeoutSeconds: 540 }).pubsub.schedule('0 0-23 * * *').onRun(async context => {
+    const hourStart = startOfHour(subHours(new Date(), 1));
     const tenMinutesLater = addMinutes(hourStart, 10);
 
-    const ethBlocksQuery = (hourStart: Date, tenMinutesLater: Date) => `
+    const ethBlocksQuery = (_hourStart: Date, _tenMinutesLater: Date) => `
     query blocksTimestampsQuery {
         blocks(first: 1, orderBy: timestamp, orderDirection: asc, where: { timestamp_gt: ${getUnixTime(
-            hourStart
-        )}, timestamp_lt: ${getUnixTime(tenMinutesLater)} }) {
+        _hourStart
+    )}, timestamp_lt: ${getUnixTime(_tenMinutesLater)} }) {
             id
             number
             timestamp
@@ -49,51 +49,50 @@ export const pullBalancerData = functions.runWith({ timeoutSeconds: 240 }).https
 
     if (REBUILD) {
         let dates = [];
-        dates = eachHourOfInterval({ start: BALANCER_CONTRACT_START_DATE, end: TODAY }).map(date => ({
-            first_ten: date,
-            last_ten: addMinutes(date, 10),
+        dates = eachHourOfInterval({ start: BALANCER_CONTRACT_START_DATE, end: TODAY }).map(_date => ({
+            first_ten: _date,
+            last_ten: addMinutes(_date, 10),
         }));
 
-        console.log('lool', dates);
+        const dateChunks = chunk(dates, 500);
 
+        for (const chunkedDates of dateChunks) {
+            const ethBlocksResponses = chunkedDates.map(async date => {
+                return (await POST(ETH_BLOCKS_SUBGRAPH_URL)('', { query: ethBlocksQuery(date.first_ten, date.last_ten) })) as EthBlocksResponse;
+            });
+            const resolvedEthBlocksResponses = await Promise.all(ethBlocksResponses);
 
-        const ethBlocksResponses = dates.map(async date => {
-            return (await POST(ETH_BLOCKS_SUBGRAPH_URL)('', { query: ethBlocksQuery(date.first_ten, date.last_ten) })) as EthBlocksResponse;
-        });
+            const blocks = resolvedEthBlocksResponses.map(_blocks => ({
+                number: _blocks.data.blocks[0].number,
+                timestamp: _blocks.data.blocks[0].timestamp,
+            }));
 
-        console.log('lool', ethBlocksResponses);
-
-
-        const resolvedEthBlocksResponses = await Promise.all(ethBlocksResponses);
-
-        const blocks = resolvedEthBlocksResponses.map(blocks => ({
-            number: blocks.data.blocks[0].number,
-            timestamp: blocks.data.blocks[0].timestamp,
-        }));
-
-        console.log('food', blocks);
-
-        const balancerResponses = blocks.map(
-            async block =>
+            const balancerResponses = blocks.map(
+                async _block =>
                 ({
-                    ...(await POST(BALANCER_SUBGRAPH_URL)('', { query: historicalBalancerQuery(block.number) })) as GraphQLResponse<BalancerData>,
-                    timestamp: block.timestamp,
+                    ...((await POST(BALANCER_SUBGRAPH_URL)('', { query: historicalBalancerQuery(_block.number) })) as GraphQLResponse<BalancerData>).data.balancer,
+                    timestamp: _block.timestamp,
                 })
-        );
+            );
 
-        const resolvedBalancerResponses = await Promise.all(balancerResponses);
-        for (const response of resolvedBalancerResponses) {
-            const hour = fromUnixTime(parseInt(response.timestamp, 10));
-            await firestore.collection(COLLECTION_NAME).doc(format(hour, 'yyyyMMdd')).set({ _v: 1 });
+            const resolvedBalancerResponses = await Promise.all(balancerResponses);
 
-            await firestore
-                .collection(COLLECTION_NAME)
-                .doc(format(hour, 'yyyyMMdd'))
-                .collection('hourlydata')
-                .add(response);
+            const batch = firestore.batch();
+            for (const response of resolvedBalancerResponses) {
+                const hour = fromUnixTime(parseInt(response.timestamp, 10));
+                await firestore.collection(COLLECTION_NAME).doc(format(hour, 'yyyyMMdd')).set({ _v: 1 });
+
+                const docRef = firestore
+                    .collection(COLLECTION_NAME)
+                    .doc(format(hour, 'yyyyMMdd'))
+                    .collection('hourlydata')
+                    .doc();
+                
+                batch.set(docRef, response);
+            }
+
+            await batch.commit();
         }
-
-        res.json({ success: true });
         return;
     }
 
@@ -111,7 +110,7 @@ export const pullBalancerData = functions.runWith({ timeoutSeconds: 240 }).https
     try {
         await firestore.collection(COLLECTION_NAME).doc(format(hourStart, 'yyyyMMdd')).set({ _v: 1 });
 
-        const result = await firestore
+        await firestore
             .collection(COLLECTION_NAME)
             .doc(format(hourStart, 'yyyyMMdd'))
             .collection('hourlydata')
@@ -119,8 +118,7 @@ export const pullBalancerData = functions.runWith({ timeoutSeconds: 240 }).https
                 ...historicalBalancerResponse?.data?.balancer,
                 timestamp: getUnixTime(hourStart),
             });
-        res.json({ result });
     } catch (error) {
-        res.json({ error });
+        console.error(error.message);
     }
 });
